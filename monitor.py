@@ -1,12 +1,10 @@
 """プレミア化候補ウォッチャー（個人利用・1日1回実行）
-最安値ドットコムの各ソフトを確認し、履歴から判定して ntfy に通知する。
-※ サイト構造は未検証。初回は debug_parse.py（README参照）で必ず確認すること。
+Yahoo!ショッピングAPIで各ソフトの在庫を確認し、履歴から判定して ntfy に通知する。
 """
 import csv, json, os, re, time, random, datetime, urllib.parse, urllib.request, html
 
 # ===== 設定（ここだけ調整すればOK） =====
-PAGE_URL = "https://www.saiyasune.com/J{jan}.html"   # JANコードからURLを作る（実ページで確認済みの形式）
-PRICE_RE = re.compile(r"[¥￥]\s*([\d,]+)")
+PAGE_URL = "https://www.saiyasune.com/J{jan}.html"   # 通知のリンク先（人が開く用）
 NO_RESULT_DAYS = 3        # 「該当商品なし」が何日続いたら通知するか
 SHOP_DROP_RATIO = 0.5     # 直近7日の最大ショップ数に対し、この割合以下で通知
 PRICE_RISE_RATIO = 1.2    # 直近7日の最安値に対し、この倍率以上で通知
@@ -15,48 +13,19 @@ RENOTIFY_DAYS = 14        # 同じソフトの再通知を控える日数
 # =======================================
 
 TOPIC = os.environ.get("NTFY_TOPIC", "")
-UA = "Mozilla/5.0 (personal-use price watcher; 1 access/day)"
 HIST = "history.json"
 today = datetime.date.today().isoformat()
 
-def fetch(url):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8", errors="replace")
-
-def to_text(raw):
-    """HTMLを表示される文字列に変換（タグ・script・styleを除去）"""
-    from bs4 import BeautifulSoup
-    soup = BeautifulSoup(raw, "html.parser")
-    for t in soup(["script", "style"]):
-        t.decompose()
-    return soup.get_text(" ", strip=True)
-
-def parse(raw):
-    """最安値.comのJANページから読み取る。
-    found=新品の最安値あり / shops=新品在庫のある主要モール数(Amazon,楽天,Yahoo,Qoo10) / used_min=中古最安値
-    ページ形式が想定と違う(ブロック画面など)場合は例外にして、誤判定を防ぐ。"""
-    text = to_text(raw)
-    if "JANコード価格比較" not in text or "大手通販モールの最安値" not in text:
-        raise ValueError("想定外のページ（ブロックまたは仕様変更）")
-    head, rest = text.split("大手通販モールの最安値", 1)
-    seg = head.split("最安値：")[-1]          # 「最安値：」から「大手通販モール…」まで
-    if "該当商品なし" in seg:
-        new_min = None
-    else:
-        pm = PRICE_RE.search(seg)
-        if not pm:
-            raise ValueError("新品最安値の価格が読み取れない")
-        new_min = int(pm.group(1).replace(",", ""))
-    mall, _, used_part = rest.partition("中古品最安値")
-    shops = 0 if "満たす商品はありませんでした" in mall else 1   # Amazon
-    for name in ("楽天市場", "Yahoo!ショッピング", "Qoo10"):
-        mm = re.search(re.escape(name) + r"\s*(該当商品なし|[¥￥])", mall)
-        if mm and mm.group(1) != "該当商品なし":
-            shops += 1
-    up = PRICE_RE.search(used_part.split("オークション")[0])
-    return {"found": new_min is not None, "shops": shops, "min_price": new_min,
-            "used_min": int(up.group(1).replace(",", "")) if up else None}
+def check(jan):
+    """Yahoo!ショッピングAPIで新品・中古の在庫状況を取得"""
+    import yahoo
+    new = yahoo.search(jan_code=jan, condition="new", in_stock=True, results=50).get("hits", [])
+    used = yahoo.search(jan_code=jan, condition="used", in_stock=True, results=50).get("hits", [])
+    np_ = [h["price"] for h in new if h.get("price")]
+    up_ = [h["price"] for h in used if h.get("price")]
+    sellers = {(h.get("seller") or {}).get("sellerId") or (h.get("seller") or {}).get("name") for h in new}
+    return {"found": bool(new), "shops": len(sellers - {None}), "min_price": min(np_) if np_ else None,
+            "used_min": min(up_) if up_ else None}
 
 def judge(rows):
     """rows: 日付昇順の履歴。通知理由のリストを返す"""
@@ -86,15 +55,15 @@ def notify(title, body, click=None):
 
 def main():
     hist = json.load(open(HIST)) if os.path.exists(HIST) else {}
-    items = [r for r in csv.DictReader(l for l in open("watchlist.csv", encoding="utf-8") if not l.startswith("#")) if r.get("name") and (r.get("jan") or r.get("url"))]
+    items = [r for r in csv.DictReader(l for l in open("watchlist.csv", encoding="utf-8") if not l.startswith("#")) if r.get("name") and r.get("jan")]
     fails, alerts = 0, []
     for it in items:
         name = it["name"].strip()
-        url = (it.get("url") or "").strip() or PAGE_URL.format(jan=it["jan"].strip())
+        url = PAGE_URL.format(jan=it["jan"].strip())
         try:
-            rec = parse(fetch(url)); rec["date"] = today
+            rec = check(it["jan"].strip()); rec["date"] = today
         except Exception as e:
-            fails += 1; print("失敗", name, e); time.sleep(random.uniform(3, 6)); continue
+            fails += 1; print("失敗", name, e); continue
         h = hist.setdefault(name, {"url": url, "rows": [], "last_notified": ""})
         h["url"] = url
         h["rows"] = [r for r in h["rows"] if r["date"] != today][-60:] + [rec]
@@ -105,7 +74,6 @@ def main():
             notify(f"プレミア化候補: {name}", " / ".join(reasons), url)
             h["last_notified"] = today
         h["reasons"] = reasons
-        time.sleep(random.uniform(3, 6))   # 相手サイトへの配慮
     if items and fails / len(items) > FAIL_ALERT_RATIO:
         notify("ウォッチャー異常", f"{len(items)}本中{fails}本で取得失敗。サイト仕様変更かブロックの可能性")
     json.dump(hist, open(HIST, "w"), ensure_ascii=False, indent=1)
