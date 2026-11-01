@@ -3,7 +3,7 @@ titles.csv を読み、最安値.comで検索して jan_map.csv に保存、確�
 確定できないものは review.csv に候補つきで出力（人が見て JAN を埋める）。
 環境変数 LIMIT で1回の処理本数を制限（既定 250）。
 """
-import csv, os, re, time, random, unicodedata, urllib.parse, urllib.request, difflib
+import csv, os, re, time, random, unicodedata, urllib.parse, urllib.request, urllib.error, difflib
 from bs4 import BeautifulSoup
 
 SEARCH_URL = "https://www.saiyasune.com/I1W{q}.html"   # 検索結果ページ（実ページのog:urlから確認済み）
@@ -19,8 +19,12 @@ PLAT = {"PS5": ["ps5", "プレイステーション5"], "PS4": ["ps4", "プレ�
 
 def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read().decode("utf-8", errors="replace")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:200].replace("\n", " ")
+        raise RuntimeError(f"HTTP {e.code} {e.reason} | {body}")
 
 def norm(s):
     s = unicodedata.normalize("NFKC", s).lower()
@@ -104,16 +108,19 @@ def main():
     done = {}
     if os.path.exists("jan_map.csv"):
         done = {(r["name"], r["platform"]): r for r in csv.DictReader(open("jan_map.csv", encoding="utf-8-sig"))}
-    limit, n = int(os.environ.get("LIMIT", 250)), 0
+    limit, n, streak = int(os.environ.get("LIMIT", 250)), 0, 0
     for t in titles:
         key = (t["name"], t["platform"])
         if key in done and done[key]["status"] == "ok": continue
         if n >= limit: break
         n += 1
         try: st, jan, note = resolve(t["name"], t["platform"])
-        except Exception as e: st, jan, note = "error", "", str(e)[:100]; time.sleep(5)
+        except Exception as e: st, jan, note = "error", "", str(e)[:300]; time.sleep(5)
         done[key] = {"name": t["name"], "platform": t["platform"], "jan": jan, "status": st, "note": note}
-        print(st, t["name"], jan)
+        print(st, t["name"], jan, note[:200] if st == "error" else "")
+        streak = streak + 1 if st == "error" else 0
+        if streak >= 8:
+            print("連続8回エラーのため中断します。上のエラー内容を確認してください。"); break
     rows = list(done.values())
     with open("jan_map.csv", "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, ["name", "platform", "jan", "status", "note"]); w.writeheader(); w.writerows(rows)
