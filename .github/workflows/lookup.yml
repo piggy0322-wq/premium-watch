@@ -1,0 +1,20 @@
+name: lookup-jan
+on: {workflow_dispatch: {}}
+permissions:
+  contents: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install beautifulsoup4
+      - run: python lookup_jan.py
+        env: {LIMIT: "250"}
+      - run: |
+          git config user.name bot && git config user.email bot@example.com
+          git add jan_map.csv watchlist.csv review.csv
+          git commit -m "lookup update" || exit 0
+          git push
