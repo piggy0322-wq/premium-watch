@@ -18,8 +18,15 @@ jobs:
           YAHOO_APP_ID: ${{ secrets.YAHOO_APP_ID }}
           LIMIT: "300"
       - run: |
+          mkdir -p /tmp/out && cp jan_map.csv watchlist.csv review.csv /tmp/out/
           git config user.name bot && git config user.email bot@example.com
-          git add jan_map.csv watchlist.csv review.csv
-          git commit -m "lookup update" || exit 0
-          git pull --rebase
-          git push
+          for i in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            cp /tmp/out/* .
+            git add jan_map.csv watchlist.csv review.csv
+            git commit -m "lookup update" || exit 0
+            git push && exit 0
+            sleep 5
+          done
+          exit 1
