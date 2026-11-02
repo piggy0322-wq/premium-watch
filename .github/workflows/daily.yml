@@ -1,0 +1,24 @@
+name: daily-watch
+on:
+  schedule: [{cron: "0 0 * * *"}]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: python monitor.py
+        env:
+          YAHOO_APP_ID: ${{ secrets.YAHOO_APP_ID }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      - run: |
+          git config user.name bot && git config user.email bot@example.com
+          git add history.json docs/index.html
+          git commit -m "daily update" || exit 0
+          git pull --rebase
+          git push
