@@ -4,10 +4,13 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: write
+concurrency:
+  group: repo-data
+  cancel-in-progress: false
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -17,8 +20,15 @@ jobs:
           YAHOO_APP_ID: ${{ secrets.YAHOO_APP_ID }}
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       - run: |
+          mkdir -p /tmp/out && cp history.json /tmp/out/ && cp docs/index.html /tmp/out/
           git config user.name bot && git config user.email bot@example.com
-          git add history.json docs/index.html
-          git commit -m "daily update" || exit 0
-          git pull --rebase
-          git push
+          for i in 1 2 3; do
+            git fetch origin main
+            git reset --hard origin/main
+            mkdir -p docs && cp /tmp/out/history.json . && cp /tmp/out/index.html docs/
+            git add history.json docs/index.html
+            git commit -m "daily update" || exit 0
+            git push && exit 0
+            sleep 5
+          done
+          exit 1
