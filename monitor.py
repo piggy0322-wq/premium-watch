@@ -61,7 +61,10 @@ def notify(title, body, click=None):
     h = {"Title": urllib.parse.quote(title), "Priority": "default"}
     if click: h["Click"] = click
     req = urllib.request.Request(f"https://ntfy.sh/{TOPIC}", data=body.encode(), headers=h)
-    urllib.request.urlopen(req, timeout=30)
+    try:
+        urllib.request.urlopen(req, timeout=30)
+    except Exception as e:
+        print(f"通知に失敗しました（監視は継続します）: {e}")
 
 def main():
     hist = json.load(open(HIST)) if os.path.exists(HIST) else {}
